@@ -1,0 +1,26 @@
+# Bỏ qua dữ liệu
+dataset_birds/
+dataset_dogs/
+dataset_food/
+images/
+
+# Bỏ qua thư mục Output (Các file model nặng)
+model_birds_cub200_final/
+model_birds_cub200_benchmark/
+model_dogs_stanford_benchmark/
+*.pt
+*.bin
+*.pth
+*.ckpt
+
+# Bỏ qua môi trường ảo và file rác hệ thống
+venv/
+__pycache__/
+*.pyc
+.DS_Store
+.idea/
+.vscode/
+
+# Bỏ qua các file ảnh báo cáo (nếu muốn giữ sạch repo)
+*.png
+*.jpg

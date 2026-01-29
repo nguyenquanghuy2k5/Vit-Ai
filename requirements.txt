@@ -1,0 +1,9 @@
+torch
+torchvision
+transformers
+datasets
+accelerate
+scikit-learn
+faiss-cpu
+streamlit
+matplotlib
