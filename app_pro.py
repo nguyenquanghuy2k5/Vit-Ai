@@ -1,165 +1,166 @@
 # ==============================================================================
-# MODULE: WEB INTERFACE (CLASSIFICATION MODE) + TTA (TEST-TIME AUGMENTATION)
-# FRAMEWORK: STREAMLIT
-# TECH: Averaging Predictions over Multiple Views
+# MODULE: AI INFERENCE SYSTEM (MULTI-DOMAIN)
+# DOMAINS: BIRDS (CUB-200), DOGS (STANFORD), FOOD (VIETNAMESE)
 # ==============================================================================
 
 import streamlit as st
 import torch
-import os
-import numpy as np
-from PIL import Image, ImageOps
 import torch.nn.functional as F
+from PIL import Image
 from transformers import ViTImageProcessor, ViTForImageClassification
+import os
 
 # ------------------------------------------------------------------------------
 # 1. SYSTEM CONFIGURATION
 # ------------------------------------------------------------------------------
-st.set_page_config(layout="wide", page_title="AI Classification Pro (TTA Mode)")
+st.set_page_config(
+    page_title="AI Multi-Domain Classification",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Dictionary quản lý đường dẫn các model
+# CẤU HÌNH ĐƯỜNG DẪN MODEL (QUAN TRỌNG: Lưu đúng các folder này tại ổ D)
 MODELS_CONFIG = {
     "BIRDS": {
-        "name": "CUB-200 Bird Species",
-        "path": "./model_birds_cub200", 
-        "desc": "Fine-tuned ViT-Base on 200 bird classes (TTA Enabled)."
+        "id": "BIRDS",
+        "name": "CUB-200-2011 (Bird Species)",
+        "path": "D:/AI_Projects/model_birds_cub200_final",
+        "desc": "Standard Benchmark Split (200 Classes)"
     },
-    # "DOGS": {
-    #     "name": "Stanford Dog Breeds",
-    #     "path": "./model_dogs_stanford",
-    #     "desc": "Fine-tuned ViT-Base on 120 dog breeds."
-    # },
+    "DOGS": {
+        "id": "DOGS",
+        "name": "Stanford Dogs (Dog Breeds)",
+        "path": "D:/AI_Projects/model_dogs_stanford_benchmark",  # <--- DỰ KIẾN
+        "desc": "Standard Benchmark (120 Classes)"
+    },
+    "FOOD": {
+        "id": "FOOD",
+        "name": "Vietnamese Food (Cuisine)",
+        "path": "D:/AI_Projects/model_food_vietnam",             # <--- DỰ KIẾN
+        "desc": "Vietnamese Traditional Dishes (30 Classes)"
+    }
 }
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # ------------------------------------------------------------------------------
-# 2. HELPER FUNCTIONS (Các hàm xử lý)
+# 2. CORE FUNCTIONS
 # ------------------------------------------------------------------------------
 @st.cache_resource
-def load_classification_model(model_path):
-    """Tải Model và Processor."""
+def load_model(model_path):
+    """
+    Load model resources with robust error handling.
+    """
+    # 1. Check if directory exists
     if not os.path.exists(model_path):
-        return None, None
-    try:
-        model = ViTForImageClassification.from_pretrained(model_path).to(DEVICE)
-        processor = ViTImageProcessor.from_pretrained(model_path)
-        model.eval()
-        return model, processor
-    except Exception as e:
-        st.error(f"Initialization Error: {str(e)}")
-        return None, None
+        return None, None, f"Directory not found: {model_path}"
 
-def generate_augmented_images(original_image):
+    try:
+        # 2. Load Model
+        model = ViTForImageClassification.from_pretrained(model_path)
+        model.to(DEVICE)
+        model.eval()
+        
+        # 3. Load Processor
+        try:
+            processor = ViTImageProcessor.from_pretrained(model_path)
+        except OSError:
+            # Fallback to Google Hub
+            processor = ViTImageProcessor.from_pretrained("google/vit-base-patch16-224-in21k")
+            
+        return model, processor, "SUCCESS"
+        
+    except Exception as e:
+        return None, None, str(e)
+
+def predict(image, model, processor):
     """
-    Tạo ra 5 phiên bản khác nhau của ảnh gốc để 'hội ý'.
+    Execute inference pipeline.
     """
-    # 1. Ảnh gốc
-    images = [original_image]
+    inputs = processor(images=image, return_tensors="pt").to(DEVICE)
     
-    # 2. Lật ngang (Mirror) - Giúp nhận diện nếu chim quay đầu hướng khác
-    images.append(ImageOps.mirror(original_image))
-    
-    # 3. Xoay nhẹ trái 15 độ
-    images.append(original_image.rotate(15))
-    
-    # 4. Xoay nhẹ phải 15 độ
-    images.append(original_image.rotate(-15))
-    
-    # 5. Crop trung tâm (Zoom vào 1 chút) - Giúp loại bỏ viền nhiễu
-    width, height = original_image.size
-    new_width = width * 0.85
-    new_height = height * 0.85
-    left = (width - new_width)/2
-    top = (height - new_height)/2
-    right = (width + new_width)/2
-    bottom = (height + new_height)/2
-    images.append(original_image.crop((left, top, right, bottom)))
-    
-    return images
+    with torch.no_grad():
+        outputs = model(**inputs)
+        logits = outputs.logits
+        probs = F.softmax(logits, dim=-1)
+        
+        # Get Top 5 Predictions
+        top_probs, top_indices = torch.topk(probs, k=5)
+        
+    return top_probs.cpu().numpy()[0], top_indices.cpu().numpy()[0]
 
 # ------------------------------------------------------------------------------
-# 3. MAIN LOGIC
+# 3. USER INTERFACE
 # ------------------------------------------------------------------------------
 def main():
-    st.title("🦅 AI Vision Pro: Multi-View Analysis")
-    st.caption("Mode: Test-Time Augmentation (TTA) - Phân tích kỹ 5 góc độ")
-    st.markdown("---")
+    st.title("AI Visual Recognition System")
+    st.markdown("### Fine-Grained Visual Categorization")
+    st.divider()
 
-    # --- SIDEBAR ---
+    # --- SIDEBAR: MODEL SELECTION ---
     with st.sidebar:
-        st.header("Parameter Control")
-        task_key = st.selectbox("Select Dataset:", list(MODELS_CONFIG.keys()))
-        selected_config = MODELS_CONFIG[task_key]
-        st.info(f"{selected_config['desc']}")
-        st.success(f"Running on: {DEVICE.upper()}")
+        st.header("System Configuration")
+        
+        # Dropdown to switch between BIRDS / DOGS / FOOD
+        domain_choice = st.selectbox("Select Domain", list(MODELS_CONFIG.keys()))
+        selected_config = MODELS_CONFIG[domain_choice]
+        
+        st.info(f"**Target:** {selected_config['name']}\n\n**Description:** {selected_config['desc']}")
+        st.text(f"Hardware Acceleration: {DEVICE.upper()}")
 
-    # --- LOAD MODEL ---
-    model, processor = load_classification_model(selected_config["path"])
-    if model is None:
-        st.error(f"CRITICAL ERROR: Model not found at `{selected_config['path']}`.")
-        st.stop()
+    # --- MAIN AREA ---
+    col1, col2 = st.columns([1, 1])
 
-    # --- UI LAYOUT ---
-    col_img, col_stat = st.columns([1, 1.5])
-
-    with col_img:
-        st.subheader("Input Image")
-        uploaded_file = st.file_uploader("Upload Image", type=["jpg", "png", "jpeg"])
+    # LEFT COLUMN: INPUT
+    with col1:
+        st.subheader("Input Data")
+        uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"])
         
         if uploaded_file:
-            image_source = Image.open(uploaded_file).convert("RGB")
-            st.image(image_source, use_container_width=True, caption="Original Query")
+            image = Image.open(uploaded_file).convert("RGB")
+            st.image(image, caption="Query Image", use_container_width=True)
 
-    with col_stat:
-        st.subheader("AI Consensus Result")
+    # RIGHT COLUMN: OUTPUT
+    with col2:
+        st.subheader("Inference Analysis")
         
         if uploaded_file:
-            with st.spinner("Đang phân tích 5 biến thể ảnh (TTA)..."):
-                
-                # BƯỚC 1: Tạo 5 ảnh biến thể
-                aug_images = generate_augmented_images(image_source)
-                
-                # BƯỚC 2: Xử lý cả 5 ảnh cùng lúc (Batch Processing)
-                inputs = processor(images=aug_images, return_tensors="pt").to(DEVICE)
-                
-                # BƯỚC 3: Dự đoán
-                with torch.no_grad():
-                    outputs = model(**inputs)
-                
-                # BƯỚC 4: Tính trung bình cộng xác suất (Averaging)
-                # outputs.logits có kích thước [5, 200] (5 ảnh, 200 lớp)
-                logits = outputs.logits
-                probs = F.softmax(logits, dim=-1) # Chuyển thành %
-                
-                # Tính trung bình dọc theo trục 0 (trục batch)
-                avg_probs = torch.mean(probs, dim=0) 
-                
-                # Lấy Top 5 từ kết quả trung bình
-                top_k_probs, top_k_indices = torch.topk(avg_probs, k=5)
+            # Load selected model
+            with st.spinner(f"Loading {domain_choice} Model..."):
+                model, processor, status = load_model(selected_config["path"])
 
-            # BƯỚC 5: Hiển thị kết quả
-            st.success("✅ Phân tích tổng hợp hoàn tất!")
-            
-            for i in range(5):
-                confidence = top_k_probs[i].item()
-                label_idx = top_k_indices[i].item()
-                label_name = model.config.id2label[label_idx]
+            # Check status
+            if status != "SUCCESS":
+                st.warning(f"Model not ready for {domain_choice}.")
+                st.error(f"Error Detail: {status}")
+                st.info("Please train this model and save it to the path specified in Config.")
+            else:
+                # Run Prediction
+                top_probs, top_indices = predict(image, model, processor)
                 
-                # Logic hiển thị màu sắc dựa trên độ tin cậy
-                if i == 0:
-                    if confidence > 0.8: color = "green"
-                    elif confidence > 0.5: color = "orange"
-                    else: color = "red"
-                    st.markdown(f":{color}[**TOP 1: {label_name}**]")
-                else:
-                    st.write(f"#{i+1}: {label_name}")
+                # Render Results
+                st.markdown("#### Top 5 Confidence Scores")
                 
-                st.progress(confidence)
-                st.caption(f"Độ tin cậy trung bình: {confidence*100:.2f}%")
-
-        else:
-            st.info("Waiting for image...")
+                for i in range(5):
+                    prob = top_probs[i]
+                    label_idx = top_indices[i]
+                    # Handle label names
+                    if hasattr(model.config, 'id2label'):
+                        label_name = model.config.id2label[label_idx]
+                    else:
+                        label_name = f"Class ID {label_idx}"
+                    
+                    # Visualization
+                    c1, c2, c3 = st.columns([3, 5, 2])
+                    with c1:
+                        if i == 0:
+                            st.markdown(f"**{label_name}**")
+                        else:
+                            st.write(f"{label_name}")
+                    with c2:
+                        st.progress(float(prob))
+                    with c3:
+                        st.write(f"{prob*100:.2f}%")
 
 if __name__ == "__main__":
     main()
