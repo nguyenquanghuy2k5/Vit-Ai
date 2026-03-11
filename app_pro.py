@@ -1,166 +1,215 @@
-# ==============================================================================
-# MODULE: AI INFERENCE SYSTEM (MULTI-DOMAIN)
-# DOMAINS: BIRDS (CUB-200), DOGS (STANFORD), FOOD (VIETNAMESE)
-# ==============================================================================
-
 import streamlit as st
 import torch
-import torch.nn.functional as F
+import time
+import pandas as pd
+import plotly.express as px
 from PIL import Image
-from transformers import ViTImageProcessor, ViTForImageClassification
-import os
+from transformers import AutoImageProcessor, AutoModelForImageClassification
+from streamlit_cropper import st_cropper 
 
-# ------------------------------------------------------------------------------
-# 1. SYSTEM CONFIGURATION
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# 1. CẤU HÌNH HỆ THỐNG
+# ==============================================================================
 st.set_page_config(
-    page_title="AI Multi-Domain Classification",
-    layout="wide",
-    initial_sidebar_state="expanded"
+    page_title="Hệ thống Phân loại Ảnh (Demo)",
+    layout="wide"
 )
 
-# CẤU HÌNH ĐƯỜNG DẪN MODEL (QUAN TRỌNG: Lưu đúng các folder này tại ổ D)
-MODELS_CONFIG = {
-    "BIRDS": {
-        "id": "BIRDS",
-        "name": "CUB-200-2011 (Bird Species)",
-        "path": "D:/AI_Projects/model_birds_cub200_final",
-        "desc": "Standard Benchmark Split (200 Classes)"
-    },
+# --- SỬA LỖI CSS: Xóa các đoạn ép màu nền gây lỗi ---
+st.markdown("""
+    <style>
+    .block-container {padding-top: 2rem;}
+    
+    /* Chỉ chỉnh nút bấm cho đẹp, không can thiệp màu chữ hệ thống */
+    .stButton>button {
+        width: 100%; 
+        border-radius: 4px; 
+        height: 3em; 
+        font-weight: bold;
+        background-color: #0068c9; /* Màu xanh chuẩn Streamlit */
+        color: white;
+        border: none;
+    }
+    .stButton>button:hover {
+        background-color: #0053a0;
+        color: white;
+    }
+    </style>
+""", unsafe_allow_html=True)
+
+# KHO CHỨA MODEL (GIỮ NGUYÊN ĐƯỜNG DẪN CỦA BẠN)
+MODEL_REGISTRY = {
     "DOGS": {
-        "id": "DOGS",
-        "name": "Stanford Dogs (Dog Breeds)",
-        "path": "D:/AI_Projects/model_dogs_stanford_benchmark",  # <--- DỰ KIẾN
-        "desc": "Standard Benchmark (120 Classes)"
+        "title": "Dữ liệu: Stanford Dogs (120 Lớp)",
+        "models": {
+            "ViT": {
+                "path": "D:/AI_Projects/model_dogs_stanford_benchmark",
+                "acc": "89.7%",
+                "desc": "Kiến trúc: Vision Transformer (ViT-Base)"
+            },
+            "ResNet": {
+                "path": "D:/AI_Projects/model_dogs_resnet50_baseline",
+                "acc": "78.2%",
+                "desc": "Kiến trúc: ResNet-50 (CNN Baseline)"
+            }
+        }
     },
-    "FOOD": {
-        "id": "FOOD",
-        "name": "Vietnamese Food (Cuisine)",
-        "path": "D:/AI_Projects/model_food_vietnam",             # <--- DỰ KIẾN
-        "desc": "Vietnamese Traditional Dishes (30 Classes)"
+    "BIRDS": {
+        "title": "Dữ liệu: CUB-200-2011 (200 Lớp)",
+        "models": {
+            "ViT": {
+                "path": "D:/AI_Projects/model_birds_cub200_final",
+                "acc": "84.3%",
+                "desc": "Kiến trúc: Vision Transformer (ViT-Base)"
+            },
+            "ResNet": {
+                "path": "D:/AI_Projects/model_birds_resnet50_baseline",
+                "acc": "51.0%",
+                "desc": "Kiến trúc: ResNet-50 (CNN Baseline)"
+            }
+        }
     }
 }
 
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-
-# ------------------------------------------------------------------------------
-# 2. CORE FUNCTIONS
-# ------------------------------------------------------------------------------
+# ==============================================================================
+# 2. HÀM LOAD MODEL
+# ==============================================================================
 @st.cache_resource
-def load_model(model_path):
-    """
-    Load model resources with robust error handling.
-    """
-    # 1. Check if directory exists
-    if not os.path.exists(model_path):
-        return None, None, f"Directory not found: {model_path}"
-
+def load_model_pipeline(path):
     try:
-        # 2. Load Model
-        model = ViTForImageClassification.from_pretrained(model_path)
-        model.to(DEVICE)
-        model.eval()
-        
-        # 3. Load Processor
-        try:
-            processor = ViTImageProcessor.from_pretrained(model_path)
-        except OSError:
-            # Fallback to Google Hub
-            processor = ViTImageProcessor.from_pretrained("google/vit-base-patch16-224-in21k")
-            
-        return model, processor, "SUCCESS"
-        
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        processor = AutoImageProcessor.from_pretrained(path)
+        model = AutoModelForImageClassification.from_pretrained(path).to(device)
+        return processor, model, device, None
     except Exception as e:
-        return None, None, str(e)
+        return None, None, None, str(e)
 
-def predict(image, model, processor):
-    """
-    Execute inference pipeline.
-    """
-    inputs = processor(images=image, return_tensors="pt").to(DEVICE)
+# ==============================================================================
+# 3. SIDEBAR
+# ==============================================================================
+st.sidebar.header("Cấu hình Tham số")
+st.sidebar.markdown("---")
+
+domain = st.sidebar.selectbox(
+    "Chọn Tập dữ liệu:",
+    ["DOGS", "BIRDS"],
+    format_func=lambda x: "Stanford Dogs" if x == "DOGS" else "CUB-200 Birds"
+)
+
+model_type = st.sidebar.radio(
+    "Chọn Mô hình:",
+    ["ViT", "ResNet"],
+    help="ViT: Mô hình đề xuất | ResNet: Mô hình đối chứng"
+)
+
+current_info = MODEL_REGISTRY[domain]["models"][model_type]
+st.sidebar.markdown("---")
+st.sidebar.info(f"Độ chính xác (Acc): {current_info['acc']}")
+st.sidebar.caption(current_info['desc'])
+
+# ==============================================================================
+# 4. GIAO DIỆN CHÍNH
+# ==============================================================================
+st.title("Demo Phân loại Ảnh Đa miền")
+st.subheader(MODEL_REGISTRY[domain]["title"])
+st.markdown("---")
+
+col1, col2 = st.columns([1, 1.2], gap="large")
+
+# --- CỘT TRÁI ---
+with col1:
+    st.markdown("##### 1. Tiền xử lý (Cắt ảnh)")
+    st.caption("Kéo khung đỏ để chọn vùng đối tượng.")
     
-    with torch.no_grad():
-        outputs = model(**inputs)
-        logits = outputs.logits
-        probs = F.softmax(logits, dim=-1)
+    uploaded_file = st.file_uploader("Tải ảnh lên (JPG, PNG)", type=['jpg', 'png', 'jpeg'])
+    
+    cropped_image = None
+    if uploaded_file:
+        img_file = Image.open(uploaded_file).convert('RGB')
         
-        # Get Top 5 Predictions
-        top_probs, top_indices = torch.topk(probs, k=5)
+        cropped_image = st_cropper(
+            img_file,
+            realtime_update=True,
+            box_color='#FF0000',
+            aspect_ratio=None,
+            should_resize_image=True
+        )
+        st.text("Preview: Ảnh đầu vào cho Model")
+    else:
+        st.info("Vui lòng tải ảnh lên để bắt đầu.")
+
+# --- CỘT PHẢI ---
+with col2:
+    st.markdown("##### 2. Kết quả Dự đoán")
+    
+    if cropped_image:
+        processor, model, device, error = load_model_pipeline(current_info["path"])
         
-    return top_probs.cpu().numpy()[0], top_indices.cpu().numpy()[0]
+        if error:
+            st.error(f"Lỗi Model: {error}")
+            st.stop()
 
-# ------------------------------------------------------------------------------
-# 3. USER INTERFACE
-# ------------------------------------------------------------------------------
-def main():
-    st.title("AI Visual Recognition System")
-    st.markdown("### Fine-Grained Visual Categorization")
-    st.divider()
-
-    # --- SIDEBAR: MODEL SELECTION ---
-    with st.sidebar:
-        st.header("System Configuration")
+        st.image(cropped_image, width=150, caption="Input (Cropped)")
         
-        # Dropdown to switch between BIRDS / DOGS / FOOD
-        domain_choice = st.selectbox("Select Domain", list(MODELS_CONFIG.keys()))
-        selected_config = MODELS_CONFIG[domain_choice]
-        
-        st.info(f"**Target:** {selected_config['name']}\n\n**Description:** {selected_config['desc']}")
-        st.text(f"Hardware Acceleration: {DEVICE.upper()}")
-
-    # --- MAIN AREA ---
-    col1, col2 = st.columns([1, 1])
-
-    # LEFT COLUMN: INPUT
-    with col1:
-        st.subheader("Input Data")
-        uploaded_file = st.file_uploader("Upload Image", type=["jpg", "jpeg", "png"])
-        
-        if uploaded_file:
-            image = Image.open(uploaded_file).convert("RGB")
-            st.image(image, caption="Query Image", use_container_width=True)
-
-    # RIGHT COLUMN: OUTPUT
-    with col2:
-        st.subheader("Inference Analysis")
-        
-        if uploaded_file:
-            # Load selected model
-            with st.spinner(f"Loading {domain_choice} Model..."):
-                model, processor, status = load_model(selected_config["path"])
-
-            # Check status
-            if status != "SUCCESS":
-                st.warning(f"Model not ready for {domain_choice}.")
-                st.error(f"Error Detail: {status}")
-                st.info("Please train this model and save it to the path specified in Config.")
-            else:
-                # Run Prediction
-                top_probs, top_indices = predict(image, model, processor)
+        if st.button("Thực hiện Phân loại"):
+            with st.spinner("Đang xử lý..."):
+                start_time = time.time()
                 
-                # Render Results
-                st.markdown("#### Top 5 Confidence Scores")
+                inputs = processor(images=cropped_image, return_tensors="pt").to(device)
+                with torch.no_grad():
+                    outputs = model(**inputs)
                 
-                for i in range(5):
-                    prob = top_probs[i]
-                    label_idx = top_indices[i]
-                    # Handle label names
-                    if hasattr(model.config, 'id2label'):
-                        label_name = model.config.id2label[label_idx]
-                    else:
-                        label_name = f"Class ID {label_idx}"
-                    
-                    # Visualization
-                    c1, c2, c3 = st.columns([3, 5, 2])
-                    with c1:
-                        if i == 0:
-                            st.markdown(f"**{label_name}**")
-                        else:
-                            st.write(f"{label_name}")
-                    with c2:
-                        st.progress(float(prob))
-                    with c3:
-                        st.write(f"{prob*100:.2f}%")
+                logits = outputs.logits
+                probs = torch.nn.functional.softmax(logits, dim=-1)[0]
+                
+                top_k = 5
+                top_probs, top_indices = torch.topk(probs, top_k)
+                
+                end_time = time.time()
+                inference_time = end_time - start_time
+                
+                top_labels = [model.config.id2label[idx.item()] for idx in top_indices]
+                top_scores = [val.item() * 100 for val in top_probs]
+                
+                best_label = top_labels[0]
+                best_score = top_scores[0]
 
-if __name__ == "__main__":
-    main()
+                # --- HIỂN THỊ METRICS (KHÔNG CÓ BACKGROUND CỨNG) ---
+                # Streamlit sẽ tự động chọn màu chữ đen/trắng tùy theo theme của máy bạn
+                m1, m2 = st.columns(2)
+                m1.metric("Nhãn dự đoán (Top-1)", best_label)
+                m1.metric("Độ tin cậy", f"{best_score:.2f}%")
+                
+                m2.metric("Thời gian suy luận", f"{inference_time:.4f}s")
+                m2.metric("Thiết bị xử lý", device.upper())
+                
+                st.markdown("---")
+                
+                # --- BIỂU ĐỒ ---
+                st.markdown("##### Phân phối xác suất (Top-5)")
+                
+                chart_data = pd.DataFrame({
+                    "Lớp": top_labels[::-1], 
+                    "Xác suất": top_scores[::-1]
+                })
+                
+                fig = px.bar(
+                    chart_data, 
+                    x="Xác suất", 
+                    y="Lớp", 
+                    orientation='h',
+                    text_auto='.2f',
+                )
+                
+                fig.update_layout(
+                    height=300, 
+                    margin=dict(l=0, r=0, t=0, b=0),
+                    xaxis_title="Độ tin cậy (%)",
+                    yaxis_title=None,
+                    font=dict(size=13) # Tăng cỡ chữ biểu đồ cho dễ đọc
+                )
+                fig.update_traces(marker_color='#0068c9') # Màu xanh tương đồng với nút bấm
+                
+                st.plotly_chart(fig, use_container_width=True)
+    else:
+        st.write("Đang chờ dữ liệu đầu vào...")

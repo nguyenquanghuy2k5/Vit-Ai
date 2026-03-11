@@ -4,6 +4,8 @@ transformers
 datasets
 accelerate
 scikit-learn
-faiss-cpu
 streamlit
+pillow
+scipy
 matplotlib
+tqdm
